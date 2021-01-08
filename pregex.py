@@ -283,13 +283,11 @@ class Match:
         return self._match.string
 
     @lru_cache()
-    def group(self, key: str):
-        post = self._require_post.get(key)
-
+    def _group(self, key: str):
         if self._repeat_map.get(key):
             repeat_key, repeat_pattern = self._repeat_map.get(key)
 
-            outer_groups = self.group(repeat_key)
+            outer_groups = self._group(repeat_key)
             if isinstance(outer_groups, str):
                 outer_groups = [outer_groups]
 
@@ -297,15 +295,26 @@ class Match:
             for outer_group in outer_groups:
                 for m in re.finditer(repeat_pattern.regex, outer_group):
                     inner_match = repeat_pattern.match(outer_group[m.start():m.end()], flags=self._flags)
-                    r = inner_match.group(key)
+                    r = inner_match._group(key)
                     if isinstance(r, str):
-                        res.append(post(r) if post else r)
+                        res.append(r)
                     else:
-                        res.extend((post(rr) if post else rr) for rr in r)
+                        res.extend(r)
             return res
         else:
-            r = self._match.group(key)
-            return post(r) if post else r
+            return self._match.group(key)
+
+    @lru_cache()
+    def group(self, key: str):
+        post = self._require_post.get(key)
+        res = self._group(key)
+        if post:
+            if isinstance(res, str):
+                return post(res)
+            else:
+                return list(post(r) for r in res)
+        else:
+            return res
 
     def __str__(self) -> str:
         return f"<pregex.Match of {self._match}>"
