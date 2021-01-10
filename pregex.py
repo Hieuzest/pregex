@@ -7,8 +7,7 @@ import enum
 
 from functools import lru_cache
 import typing
-from typing import Any, Callable
-from typing import Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 
 class RegexFlag(enum.IntFlag):
@@ -154,6 +153,12 @@ class Raw(AbsPattern):
         return f"{type(self).__name__}({self._pattern!r})"
 
 
+AnyPlain = Raw(r"[^,\[\]]*")
+AnyElement = Raw(r"[^,\[\]]+|(\[[^\]]*\])")
+AnyMessage = Raw(r"([^,\[\]]|(\[[^\]]*\]))*")
+AnyBlank = Raw(r"\s*")
+
+
 class CompiledPattern(Raw):
     def __init__(self, pattern, **kwargs) -> None:
         super().__init__(str(pattern))
@@ -183,7 +188,10 @@ class Struct(AbsPattern):
 
 
 class Require(AbsPattern):
-    def __init__(self, pattern, name: str, post=...) -> None:
+    def __init__(self, pattern=AnyPlain, *, name: str, post=...) -> None:
+        """
+            post: ... / Callable / (Union[Callable, Tuple[Callable]], Union[Callable, Tuple[Callable]])
+        """
         self._pattern = pattern
         self._name = name
         self._post = post
@@ -194,11 +202,14 @@ class Require(AbsPattern):
     def _compile(self, flags: RegexFlag, *, state:_State) -> "Raw":
         state.repeat.add(self._name)
         if self._post is ...:
-            state.require[self._name] = state.require.get(_REQUIRE_DEFAULT_KEY, (None, None))[state.struct.check()]
-        elif isinstance(self._post, Tuple):
-            state.require[self._name] = self._post[state.struct.check()]
+            self._post = state.require.get(_REQUIRE_DEFAULT_KEY)
+        if isinstance(self._post, Tuple):
+            if isinstance(self._post[state.struct.check()], Tuple):
+                state.require[self._name] = (unescape, *self._post[state.struct.check()]) if state.struct.check() else self._post[state.struct.check()]
+            else:
+                state.require[self._name] = (unescape, self._post[state.struct.check()]) if state.struct.check() else self._post[state.struct.check()]
         else:
-            state.require[self._name] = self._post
+            state.require[self._name] = (unescape, self._post) if state.struct.check() else self._post
         return self._construct(_compile(self._pattern, flags=flags, state=state))
 
     def __repr__(self) -> str:
@@ -234,7 +245,7 @@ class Repeat(AbsPattern):
             p = _compile(self._pattern, flags=flags, state=state, raw=False)
             if repeat.check(p):
                 p = self._construct(p)
-                p = Require(p, repeat.current)
+                p = Require(p, name=repeat.current)
             else:
                 p = self._construct(p)
         return _compile(p, flags=flags, state=state)
@@ -259,11 +270,6 @@ class Optional(Repeat):
 class Plus(Repeat):
     def __init__(self, pattern) -> None:
         super().__init__(pattern, times=self.Plus)
-
-
-AnyPlain = Raw(r"[^,\[\]]*")
-AnyMessage = Raw(r"([^,\[\]]|(\[[^,\]]*\]))*")
-AnyBlank = Raw(r"\s*")
 
 
 class Match:
@@ -307,12 +313,21 @@ class Match:
     @lru_cache()
     def group(self, key: str):
         post = self._require_post.get(key)
+        if post and not isinstance(post, Tuple):
+            post = (post, )
+        
+        def _post(x):
+            for _p in post:
+                if _p:
+                    x = _p(x)
+            return x
+
         res = self._group(key)
         if post:
             if isinstance(res, str):
-                return post(res)
+                return _post(res)
             else:
-                return list(post(r) for r in res)
+                return list(_post(r) for r in res)
         else:
             return res
 
@@ -383,5 +398,5 @@ def match_rawstring(pattern, string: str, flags: RegexFlag = 0):
 __all__ = [
     'RegexFlag', 'escape', 'unescape', 'compile', 'match', 'match_rawstring', 
     'Pattern', 'Raw', 'Repeat', 'Kleene', 'Optional', 'Plus', 'Struct', 'Require', 
-    'AnyPlain', 'AnyMessage', 'AnyBlank',
+    'AnyPlain', 'AnyElement', 'AnyMessage', 'AnyBlank',
 ]
