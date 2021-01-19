@@ -111,14 +111,14 @@ class AbsPattern:
 
     @property
     @lru_cache()
-    def regex(self) -> str:
+    def re(self) -> str:
         return str(compile(self))
 
     def _compile(self, flags: RegexFlag, *, state: _State) -> "Raw":
         raise NotImplementedError
 
     def __str__(self) -> str:
-        return self.regex
+        return self.re
 
 
 class Pattern(AbsPattern):
@@ -164,9 +164,17 @@ class CompiledPattern(Raw):
         super().__init__(str(pattern))
         self._kwargs = kwargs
 
+    def search(self, s: str, flags: RegexFlag = 0) -> "Match":
+        m = re.search(self._pattern, s, flags=flags)
+        return Match(match=m, pattern=self, flags=flags) if m else None
+
     def match(self, s: str, flags: RegexFlag = 0) -> "Match":
         m = re.match(self._pattern, s, flags=flags)
-        return Match(match=m, flags=flags, **self._kwargs) if m else None
+        return Match(match=m, pattern=self, flags=flags) if m else None
+
+    def fullmatch(self, s: str, flags: RegexFlag = 0) -> "Match":
+        m = re.fullmatch(self._pattern, s, flags=flags)
+        return Match(match=m, pattern=self, flags=flags) if m else None
 
 
 class Struct(AbsPattern):
@@ -273,13 +281,22 @@ class Plus(Repeat):
 
 
 class Match:
-    def __init__(self, match, flags, _repeat_map, _require_post) -> None:
+    def __init__(self, match, pattern, flags) -> None:
         super().__init__()
         self._match: typing.Match = match
+        self._pattern: CompiledPattern = pattern
         self._flags: RegexFlag = flags
-        self._repeat_map: Dict[str, Tuple[str, CompiledPattern]] = _repeat_map
-        self._require_post: Dict[str, Callable] = _require_post
+        self._repeat_map: Dict[str, Tuple[str, CompiledPattern]] = self._pattern._kwargs['_repeat_map']
+        self._require_post: Dict[str, Callable] = self._pattern._kwargs['_require_post']
     
+    @property
+    def pattern(self) -> CompiledPattern:
+        return self._pattern
+
+    @property
+    def re(self) -> str:
+        return self._pattern._pattern
+
     @property
     def match(self) -> typing.Match:
         return self._match
@@ -288,30 +305,67 @@ class Match:
     def string(self) -> str:
         return self._match.string
 
+    @property
+    def pos(self) -> int:
+        return self._match.pos
+
+    @property
+    def endpos(self) -> int:
+        return self._match.endpos
+
     @lru_cache()
-    def _group(self, key: str):
+    def span(self, key = None, base: int = None):
+        if not base:
+            base = self.pos
+        if not key:
+            return (base + self.pos, base + self.endpos)
+
         if self._repeat_map.get(key):
             repeat_key, repeat_pattern = self._repeat_map.get(key)
 
-            outer_groups = self._group(repeat_key)
-            if isinstance(outer_groups, str):
-                outer_groups = [outer_groups]
+            outer_spans = self.span(repeat_key, base=base)
+            if isinstance(outer_spans, Tuple):
+                outer_spans = [outer_spans]
 
             res = []
-            for outer_group in outer_groups:
-                for m in re.finditer(repeat_pattern.regex, outer_group):
-                    inner_match = repeat_pattern.match(outer_group[m.start():m.end()], flags=self._flags)
-                    r = inner_match._group(key)
-                    if isinstance(r, str):
+            for outer_span in outer_spans:
+                outer_string = self.string[slice(*outer_span)]
+                for m in re.finditer(repeat_pattern.re, outer_string):
+                    inner_match = repeat_pattern.match(outer_string[slice(*m.span())], flags=self._flags)
+                    r = inner_match.span(key, base=outer_span[0]+m.start())
+
+                    if isinstance(r, Tuple):
                         res.append(r)
                     else:
                         res.extend(r)
             return res
         else:
-            return self._match.group(key)
+            r = self._match.span(key)
+            return (base + r[0], base + r[1])
+
+    def start(self, key = None):
+        span = self.span(key)
+        if isinstance(span, Tuple):
+            return span[0]
+        else:
+            return list(sp[0] for sp in span)
+    
+    def end(self, key = None):
+        span = self.span(key)
+        if isinstance(span, Tuple):
+            return self.string[slice(*span)]
+        else:
+            return list(sp[1] for sp in span)
+
+    def _group(self, key = None):
+        span = self.span(key)
+        if isinstance(span, Tuple):
+            return self.string[slice(*span)]
+        else:
+            return list(self.string[slice(*sp)] for sp in span)
 
     @lru_cache()
-    def group(self, key: str):
+    def group(self, key = None):
         post = self._require_post.get(key)
         if post and not isinstance(post, Tuple):
             post = (post, )
@@ -387,6 +441,22 @@ def match(pattern, message, flags: RegexFlag = 0, **kwargs):
     if not isinstance(pattern, CompiledPattern):
         pattern = compile(pattern, flags=flags, **kwargs)
     return pattern.match(message, flags=flags)
+
+
+def fullmatch(pattern, message, flags: RegexFlag = 0, **kwargs):
+    if not isinstance(message, str):
+        message = str(message)
+    if not isinstance(pattern, CompiledPattern):
+        pattern = compile(pattern, flags=flags, **kwargs)
+    return pattern.fullmatch(message, flags=flags)
+
+
+def search(pattern, message, flags: RegexFlag = 0, **kwargs):
+    if not isinstance(message, str):
+        message = str(message)
+    if not isinstance(pattern, CompiledPattern):
+        pattern = compile(pattern, flags=flags, **kwargs)
+    return pattern.search(message, flags=flags)
 
 
 def match_rawstring(pattern, string: str, flags: RegexFlag = 0):
