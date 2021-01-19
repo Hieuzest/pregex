@@ -353,7 +353,7 @@ class Match:
     def end(self, key = None):
         span = self.span(key)
         if isinstance(span, Tuple):
-            return self.string[slice(*span)]
+            return span[1]
         else:
             return list(sp[1] for sp in span)
 
