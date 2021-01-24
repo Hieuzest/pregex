@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pregex"
-version = "0.3.1"
+version = "0.3.2"
 description = "Regex with structural pattern matching"
 authors = ["Hieuzest <girkirin@hotmail.com>"]
 license = "MIT"

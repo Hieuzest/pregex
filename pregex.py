@@ -393,7 +393,7 @@ class Match:
 
 
 def _enclose(s: str):
-    return f"({s})"
+    return f"(?:{s})"
 
 
 def _escape(s: str, code=True, comma=True):
